@@ -1,12 +1,19 @@
 import socket
 import os
+import asyncio
+import threading
 from pathlib import Path
 
 class ChatClient:
-    def __init__(self,address,portNum):
+    def __init__(self,address,portNum,connection):
         self.address = address
         self.portNum = portNum
+        self.mySocket = connection
+        self.myRoom = None
 
+    def getClientName(self):
+        return str(self.address) + " " + str(self.portNum)
+    
     def joinRoom(self, chatRoom):
         self.myRoom = chatRoom
 
@@ -15,7 +22,6 @@ class ChatClient:
             self.myRoom = None
         else:
             print("no chatRoom.")
-
         
 class ChatRoom:
     def __init__(self,roomName) -> None:
@@ -25,12 +31,21 @@ class ChatRoom:
         self.roomSize = 5
 
     def addClient(self, chatClient):
-        key = str(chatClient.address) + str(chatClient.portNum)
+        key = str(chatClient.address) + " " + str(chatClient.portNum)
 
         if key not in self.chatClientMap:
             self.chatClientMap[key] = chatClient
         else:
             print("client " + key + " already exists in the room " + self.roomName)
+
+    def deleteClient(self, chatClient):
+        key = str(chatClient.address) + " " + str(chatClient.portNum)
+
+        if key not in self.chatClientMap:
+            print("This room does not contain the client " + key + ".")
+        else:
+            print("delete the client " + key + " from the room " + self.roomName)
+            self.chatClientMap.pop(key)
 
 class ChatRoomManager:
     def __init__(self) -> None:
@@ -42,62 +57,95 @@ class ChatRoomManager:
         else:
             print("roomName " + roomName + "already exists.")
 
+    def moveClient(self,cc,destRoomName):
+        #ccが元居たルームからccを削除
+        if cc.myRoom is not None:
+            cc.myRoom.deleteClient(cc)
 
-    
-
-# まず、必要なモジュールをインポートし、ソケットオブジェクトを作成して、アドレスファミリ（AF_INET）とソケットタイプ（SOCK_STREAM）を指定します。サーバのアドレスは、任意のIPアドレスからの接続を受け入れるアドレスである0.0.0.0に設定し、サーバのポートは9001に設定されています。
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server_address = '0.0.0.0'
-server_port = 9001
-
-# 次に、現在の作業ディレクトリに「temp」という名前のフォルダが存在するかどうかをチェックします。存在しない場合は、os.makedirs() 関数を使用してフォルダを作成します。このフォルダは、クライアントから受信したファイルを格納するために使用されます。
-dpath = 'temp'
-if not os.path.exists(dpath):
-    os.makedirs(dpath)
-
-print('Starting up on {} port {}'.format(server_address, server_port))
-
-# 次に、サーバは bind()関数を使用して、ソケットをサーバのアドレスとポートに紐付けします。その後、listen()関数を呼び出すことで、サーバは着信接続の待ち受けを開始します。サーバは一度に最大1つの接続を受け入れることができます。
-sock.bind((server_address, server_port))
-
-sock.listen(1)
+        #行先のルームにccを追加
+        self.chatRoomMap[destRoomName].addClient(cc)
+        cc.joinRoom(self.chatRoomMap[destRoomName])
 
 crm = ChatRoomManager()
+clientsMap = {}
 
-connection, client_address = sock.accept()
-print('connection from', client_address)
+async def handleClient(reader,writer):
+    while True:
+        try:
+            client_address = writer.get_extra_info('peername')
+            print(client_address)
 
-while True:
-    try:
-        print("waiting for message.")
-        request = connection.recv(4096).decode('utf-8')
-        print(request)
-        result = request.split(":")
+            print("waiting for message.")
+            data = await reader.read(100)
+            if not data:
+                break
 
-        if len(result) == 2:
-            roomName = result[0]
-            command = result[1]
+            request = data.decode('utf-8')
+            print(request)
+            result = request.split(":")
 
-            cc = ChatClient(client_address[0],client_address[1])
+            if writer.get_extra_info('peername') not in clientsMap:
+                clientsMap[client_address] = ChatClient(client_address[0],client_address[1],writer)
 
-            if command == "join":
-                crm.chatRoomMap[roomName].addClient(cc)
-                cc.joinRoom(crm.chatRoomMap[roomName])
-            elif command == "create":
-                crm.createChatRoom(roomName)
-                crm.chatRoomMap[roomName].addClient(cc)
-                cc.joinRoom(crm.chatRoomMap[roomName])
+            #ルームの作成，移動など
+            if len(result) == 2:
+                roomName = result[0]
+                command = result[1]
 
-        for key, room in crm.chatRoomMap.items():
-            print("this room : " + key)
-            print("contains...")
-            for ckey, cc in room.chatClientMap.items():
-                print(ckey)
+                if command == "join":
+                    if roomName not in crm.chatRoomMap:
+                        print("chatRoom "+ roomName + " dose not exist.")
+                    else:
+                        crm.moveClient(clientsMap[client_address],roomName)
+
+                elif command == "create":
+                    crm.createChatRoom(roomName)
+                    crm.moveClient(clientsMap[client_address],roomName)
+
+            #メッセージの送信
+            elif len(result) == 3:
+                roomName = result[0]
+                messageSize = result[1]
+                message = result[2]
+
+                #同じルームroomNameに入っているすべてのクライアントにメッセージを送信
+                for currentClient in crm.chatRoomMap[roomName].chatClientMap.values():
+                    if currentClient != clientsMap[client_address]:
+                        sendData = "message from " + clientsMap[client_address].getClientName() + ": " + message
+                        sendData = sendData.encode('utf-8')
+                        currentClient.mySocket.write(sendData)
+                        await currentClient.mySocket.drain()
+
+            for key, room in crm.chatRoomMap.items():
+                print("this room : " + key)
+                print("contains...")
+                for ckey in room.chatClientMap:
+                    print(ckey)
+                print("")
+
+            # for key, client in clientsMap.items():
+            #     print("client: " + client.address + " " + str(client.portNum))
+            #     print("-room : " + (client.myRoom.roomName if client.myRoom is not None else "None"))
+            #     print("")
 
 
-    except Exception as e:
-        print('Error: ' + str(e))
-        break
+        except Exception as e:
+            print('Error: ' + str(e))
+            break
 
-print("Closing current connection")
-connection.close()
+    clientsMap.pop(client_address)
+    writer.close()
+    
+
+async def main():
+    # サーバーソケットを作成
+    server = await asyncio.start_server(handleClient, '0.0.0.0', 9001)
+    addr = server.sockets[0].getsockname()
+
+    print(f'Serving on {addr}')
+
+    async with server:
+        await server.serve_forever()
+
+if __name__ == "__main__":
+    asyncio.run(main())

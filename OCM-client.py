@@ -1,38 +1,44 @@
-import socket
-import sys
-import os
+import asyncio
 
-# protocol_header()という関数は、サーバに送信されるファイルのヘッダ情報をフォーマットするために使用されます。このヘッダは、ファイル名の長さ（バイト）、JSONデータの長さ（バイト）、データの長さ（バイト）の3つの値で構成されます。これらの値は、to_bytes()メソッドを用いてバイナリに変換され、1つの64ビットバイナリに結合されます。
-def protocol_header(filename_length, json_length, data_length):
-    return filename_length.to_bytes(1, "big") + json_length.to_bytes(3,"big") + data_length.to_bytes(4,"big")
+async def sendMessage(reader,writer):
+    while True:
+        try:
+            # messageを送信
+            message = await asyncio.to_thread(input, "Input request with splitting calculator \":\" : ")
+            message_bits = message.encode('utf-8')
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            writer.write(message_bits)
+            await writer.drain()
 
-# サーバが待ち受けているポートにソケットを接続します
-server_address = input("Type in the server's address to connect to: ")
-server_port = 9001
+        except Exception as e:
+            print('ERROR: ' + str(e))
+            break
 
-print('connecting to {}'.format(server_address, server_port))
-
-try:
-    # 接続後、サーバとクライアントが相互に読み書きができるようになります 
-    sock.connect((server_address, server_port))
-except socket.error as err:
-    print(err)
-    sys.exit(1)
-
-while True:
-    try:
-        # messageを送信
-        message = input("Input request with splitting calculator \":\" : ")
-        message_bits = message.encode('utf-8')
-
-        sock.send(message_bits)
-
-    except Exception as e:
-        print('ERROR: ' + str(e))
-        break
+async def recvMessage(reader,writer):
+    while True:
+        try:
+            recvData = await reader.read(4096)
+            if not recvData:
+                break
+            print(recvData.decode('utf-8'))
+        except Exception as e:
+            print('ERROR: ' + str(e))
+            break
 
 
-print('closing socket')
-sock.close()
+async def main():
+    global server_address, server_port
+    server_address = "localhost"
+    server_port = 9001
+    print('connecting to {}:{}'.format(server_address, server_port))
+
+    reader, writer = await asyncio.open_connection(server_address,server_port)
+    send_task = asyncio.create_task(sendMessage(reader,writer))
+    recv_task = asyncio.create_task(recvMessage(reader,writer))
+
+    await asyncio.gather(send_task, recv_task)
+    writer.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
