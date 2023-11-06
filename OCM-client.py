@@ -4,10 +4,18 @@ async def sendMessage(reader,writer):
     while True:
         try:
             # messageを送信
-            message = await asyncio.to_thread(input, "Input request with splitting calculator \":\" : ")
-            message_bits = message.encode('utf-8')
+            command = await asyncio.to_thread(input, "Input command : ")
 
-            writer.write(message_bits)
+            if command == "join" or command == "create":
+                roomName = await asyncio.to_thread(input, "Input roomName : ")
+                sendData = command + ":" + roomName
+            elif command == "send":
+                message = await asyncio.to_thread(input, "Input message : ")
+                sendData = command + ":" + str(len(message)) + ":" + message
+
+            sendData_bits = sendData.encode('utf-8')
+
+            writer.write(sendData_bits)
             await writer.drain()
 
         except Exception as e:

@@ -87,34 +87,43 @@ async def handleClient(reader,writer):
             if writer.get_extra_info('peername') not in clientsMap:
                 clientsMap[client_address] = ChatClient(client_address[0],client_address[1],writer)
 
-            #ルームの作成，移動など
-            if len(result) == 2:
-                roomName = result[0]
-                command = result[1]
+            command = result[0]
 
-                if command == "join":
-                    if roomName not in crm.chatRoomMap:
-                        print("chatRoom "+ roomName + " dose not exist.")
-                    else:
-                        crm.moveClient(clientsMap[client_address],roomName)
-
-                elif command == "create":
-                    crm.createChatRoom(roomName)
+            # ルームの移動
+            if command == "join":
+                roomName = result[1]
+                if roomName not in crm.chatRoomMap:
+                    print("chatRoom "+ roomName + " does not exist.")
+                else:
                     crm.moveClient(clientsMap[client_address],roomName)
 
+            # ルームの作成
+            elif command == "create":
+                roomName = result[1]
+
+                if roomName not in crm.chatRoomMap:
+                    crm.createChatRoom(roomName)
+                    crm.moveClient(clientsMap[client_address],roomName)
+                else:
+                    print("the room " + roomName + " already exists.")
+
             #メッセージの送信
-            elif len(result) == 3:
-                roomName = result[0]
+            elif command == "send":
                 messageSize = result[1]
                 message = result[2]
 
                 #同じルームroomNameに入っているすべてのクライアントにメッセージを送信
-                for currentClient in crm.chatRoomMap[roomName].chatClientMap.values():
+                for currentClient in clientsMap[client_address].myRoom.chatClientMap.values():
                     if currentClient != clientsMap[client_address]:
-                        sendData = "message from " + clientsMap[client_address].getClientName() + ": " + message
+                        sendData = "message from " + clientsMap[client_address].getClientName() + ": " + message + "\n"
+                        sendData += "message size : " + messageSize
                         sendData = sendData.encode('utf-8')
                         currentClient.mySocket.write(sendData)
                         await currentClient.mySocket.drain()
+
+            # 上記以外のコマンドが入力されても何も起きない
+            else:
+                print("invalid command.")
 
             for key, room in crm.chatRoomMap.items():
                 print("this room : " + key)
@@ -123,10 +132,10 @@ async def handleClient(reader,writer):
                     print(ckey)
                 print("")
 
-            # for key, client in clientsMap.items():
-            #     print("client: " + client.address + " " + str(client.portNum))
-            #     print("-room : " + (client.myRoom.roomName if client.myRoom is not None else "None"))
-            #     print("")
+            for key, client in clientsMap.items():
+                print("client: " + client.getClientName())
+                print("-room : " + (client.myRoom.roomName if client.myRoom is not None else "None"))
+                print("")
 
 
         except Exception as e:
